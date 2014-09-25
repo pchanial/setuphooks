@@ -6,7 +6,7 @@ from numpy.distutils.core import setup
 # 'python setup.py --version' with the same module
 from test_hooks import get_cmdclass, get_version
 
-VERSION = '0.1'
+VERSION = '0.2'
 name = 'setuphooks'
 
 setup(name=name,
