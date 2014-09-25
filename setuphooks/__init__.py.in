@@ -1,2 +1,2 @@
 from __future__ import print_function
-print('fix on the 0.2 branch')
+print('new fix on the 0.2 branch')
