@@ -2,8 +2,9 @@
 The version number is obtained from git tags, branch and commit identifier.
 It has been designed for the following workflow:
 
-- git checkout master
-- modify, commit, commit
+- git init
+- create setup.py commit
+- more commit
 - set version 0.1 in setup.py -> 0.1.dev03
 - modify, commit              -> 0.1.dev04
 - git checkout -b v0.1        -> 0.1.dev04
@@ -17,11 +18,21 @@ It has been designed for the following workflow:
 - git checkout master         -> 0.1.dev04
 - set version=0.2 in setup.py -> 0.2.dev01
 - modify, commit              -> 0.2.dev02
+- git tag 0.2                 -> 0.2
+- set version=0.3 in setup.py -> 0.3.dev01
+
 
 When working on the master branch, the dev number is the number of commits
-since the last branch of name "v[0-9.]+"
+since the last release branch (by default of name "v[0-9.]+", but it is
+configurable) or the last tag.
 
 """
+
+# These variables can be changed by the hooks importer
+ABBREV = 5
+REGEX_RELEASE = '^v(?P<name>[0-9.]+)$'
+REQUIRES_FORTRAN = False
+
 import numpy
 import os
 import re
@@ -37,62 +48,125 @@ try:
     root = os.path.dirname(os.path.abspath(__file__))
 except NameError:
     root = os.path.dirname(os.path.abspath(sys.argv[0]))
-ABBREV = 5
-BRANCH_REGEX = '^refs/(heads|remotes/origin)/v[0-9.]+$'
+
+# monkey patch to allow pure and elemental routines in preprocessed
+# Fortran libraries
+numpy.distutils.from_template.routine_start_re = re.compile(
+    r'(\n|\A)((     (\$|\*))|)\s*((im)?pure\s+|elemental\s+)*(subroutine|funct'
+    r'ion)\b', re.I)
+numpy.distutils.from_template.function_start_re = re.compile(
+    r'\n     (\$|\*)\s*((im)?pure\s+|elemental\s+)*function\b', re.I)
+
+
+def get_cmdclass():
+
+    class BuildCommand(build):
+        def run(self):
+            _write_version(self.distribution.get_name(),
+                           self.distribution.get_version())
+            build.run(self)
+
+    class SDistCommand(sdist):
+        def make_release_tree(self, base_dir, files):
+            _write_version(self.distribution.get_name(),
+                           self.distribution.get_version())
+            initfile = os.path.join(self.distribution.get_name(),
+                                    '__init__.py')
+            if initfile not in files:
+                files.append(initfile)
+            sdist.make_release_tree(self, base_dir, files)
+
+    class CoverageCommand(Command):
+        description = "run the package coverage"
+        user_options = [('file=', 'f', 'restrict coverage to a specific file'),
+                        ('erase', None,
+                         'erase previously collected coverage before run'),
+                        ('html-dir=', None,
+                         'Produce HTML coverage information in dir')]
+
+        def run(self):
+            cmd = ['nosetests', '--with-coverage', '--cover-html',
+                   '--cover-package=' + self.distribution.get_name(),
+                   '--cover-html-dir=' + self.html_dir]
+            if self.erase:
+                cmd.append('--cover-erase')
+            call(cmd + [self.file])
+
+        def initialize_options(self):
+            self.file = 'test'
+            self.erase = 0
+            self.html_dir = 'htmlcov'
+
+        def finalize_options(self):
+            pass
+
+    class TestCommand(Command):
+        description = "run the test suite"
+        user_options = [('file=', 'f', 'restrict test to a specific file')]
+
+        def run(self):
+            call(['nosetests', self.file])
+
+        def initialize_options(self):
+            self.file = 'test'
+
+        def finalize_options(self):
+            pass
+
+    return {'build': BuildCommand,
+            'build_ext': build_ext,
+            'coverage': CoverageCommand,
+            'sdist': SDistCommand,
+            'test': TestCommand}
 
 
 def get_version(name, default):
-    version = get_version_git(default)
-    if version != '':
-        return version
-    return get_version_init_file(name) or default
+    return _get_version_git(default) or _get_version_init_file(name) or default
 
 
-def get_version_git(default):
+def _get_version_git(default):
+    INF = 2147483647
+
     def run(cmd, cwd=root):
-        git = "git"
-        if sys.platform == "win32":
-            git = "git.cmd"
-        cmd = [git] + cmd
-        process = Popen(cmd, cwd=cwd, stdout=PIPE, stderr=PIPE)
+        git = 'git'
+        if sys.platform == 'win32':
+            git = 'git.cmd'
+        cmd = git + ' ' + cmd
+        process = Popen(cmd.split(), cwd=cwd, stdout=PIPE, stderr=PIPE)
         stdout, stderr = process.communicate()
-        if stderr != '':
-            raise RuntimeError(
-                'Command failed: {}\n{}'.format(' '.join(cmd), stderr))
         if process.returncode != 0:
+            if stderr != '':
+                stderr = '\n' + stderr
             raise RuntimeError(
-                'Command failed (error {}): {}'.format(process.returncode,
-                                                       ' '.join(cmd)))
+                'Command failed (error {}): {}{}'.format(
+                    process.returncode, cmd, stderr))
         return stdout.strip()
 
     def get_branches():
-        return run(['for-each-ref', '--sort=-committerdate', '--format=%(ref'
-                    'name)', 'refs/heads', 'refs/remotes/origin']).split('\n')
+        return run('for-each-ref --sort=-committerdate --format=%(refname) '
+                   'refs/heads refs/remotes/origin').splitlines()
 
     def get_branch_name():
-        branch = run(['rev-parse', '--abbrev-ref', 'HEAD'])
+        branch = run('rev-parse --abbrev-ref HEAD')
         if branch != 'HEAD':
             return branch
-        branch = run(['branch', '--no-color', '--contains',
-                      'HEAD']).splitlines()
+        branch = run('branch --no-color --contains HEAD').splitlines()
         return branch[min(1, len(branch)-1)].strip()
 
     def get_description():
+        branch = get_branch_name()
         try:
-            description = run([
-                'describe', '--tags', '--abbrev={}'.format(ABBREV)])
+            description = run('describe --abbrev={} --tags'.format(ABBREV))
         except RuntimeError:
-            print 'git describe without --always failed.'
-            description = run([
-                'describe', '--abbrev={}'.format(ABBREV), '--always'])
-            print 'description:', description
+            description = run('describe --abbrev={} --always'.format(ABBREV))
             regex = r"""^
             (?P<commit>.*?)
             (?P<dirty>(-dirty)?)
             $"""
             m = re.match(regex, description, re.VERBOSE)
             commit, dirty = (m.group(_) for _ in 'commit,dirty'.split(','))
-            return '', -1, commit, dirty
+            return branch, '', INF, commit, dirty
+
         regex = r"""^
         (?P<tag>.*?)
         (?:-
@@ -104,73 +178,92 @@ def get_version_git(default):
         m = re.match(regex, description, re.VERBOSE)
         tag, rev, commit, dirty = (m.group(_)
                                    for _ in 'tag,rev,commit,dirty'.split(','))
-        rev = int(rev)
-        return tag, rev, commit, dirty
+        if rev is None:
+            rev = 0
+            commit = ''
+        else:
+            rev = int(rev)
+        return branch, tag, rev, commit, dirty
 
     def get_rev_since_branch(branch):
         try:
             # get best common ancestor
-            common = run(['merge-base', 'HEAD', branch])
+            common = run('merge-base HEAD ' + branch)
         except RuntimeError:
-            return -1  # no common ancestor, the branch is dangling
-        return int(run(['rev-list', '--count', 'HEAD', '^' + common]))
+            return INF  # no common ancestor, the branch is dangling
+        return int(run('rev-list --count HEAD ^' + common))
 
-    def get_branch_rev():
+    def get_rev_since_any_branch():
+        if REGEX_RELEASE.startswith('^'):
+            regex = REGEX_RELEASE[1:]
+        else:
+            regex = '.*' + REGEX_RELEASE
+        regex = '^refs/(heads|remotes/origin)/' + regex
+
         branches = get_branches()
         for branch in branches:
             # filter branches according to BRANCH_REGEX
-            if not re.match(BRANCH_REGEX, branch):
+            if not re.match(regex, branch):
                 continue
             rev = get_rev_since_branch(branch)
             if rev > 0:
                 return rev
         # no branch has been created from an ancestor
-        return -1
+        return INF
 
     try:
-        run(['rev-parse', '--is-inside-work-tree'])
+        run('rev-parse --is-inside-work-tree')
     except (OSError, RuntimeError):
         return ''
 
-    tag, rev_tag, commit, dirty = get_description()
-    print 'tag', 'rev_tag', 'commit', tag, rev_tag, commit, dirty
+    branch, tag, rev_tag, commit, dirty = get_description()
+
+    # check if the commit is tagged
     if rev_tag == 0:
         return tag + dirty
 
     # if the current branch is master, look up the closest tag or the closest
-    # release branch to get the dev number
-    branch = get_branch_name()
-    if get_branch_name() == 'master':
-        rev_branch = get_branch_rev()
-        prefix = default
-        if rev_branch == -1 and rev_tag == -1:
-            # no branch and no tag from ancestors, counting from root
-            rev = int(run(['rev-list', '--count', 'HEAD']))
-        elif rev_branch == -1 or rev_tag <= rev_branch:
-            rev = rev_tag
-            prefix = tag
-        else:
-            rev = rev_branch
-        if prefix != '':
-            prefix += '.'
-        return '{}dev{:02}-g{}{}'.format(prefix, rev, commit, dirty)
-
-    isrelease = re.match('^v[0-9.]+$', branch) is not None
-    rev_master = get_rev_since_branch('master')
-    if isrelease:
-        version = tag
+    # release branch rev to get the dev number otherwise, look up the closest
+    # tag or the closest master rev.
+    suffix = 'dev'
+    if branch == 'master':
+        rev_branch = get_rev_since_any_branch()
+        name = default
+        is_branch_release = False
     else:
-        version = branch
-    if rev_tag > 0:
-        if rev_master < rev_tag:
-            version += '.pre{:02}'.format(rev_master)
-        else:
-            version += '.post{:02}'.format(rev_tag)
-        version += '-g' + commit
-    return version + dirty
+        rev_branch = get_rev_since_branch('master')
+        name = branch
+        m = re.match(REGEX_RELEASE, branch)
+        is_branch_release = m is not None
+        if is_branch_release:
+            try:
+                name = m.group('name')
+            except IndexError:
+                pass
+        elif rev_tag == rev_branch:
+            tag = branch
+
+    if rev_branch == rev_tag == INF:
+        # no branch and no tag from ancestors, counting from root
+        rev = int(run('rev-list --count HEAD'))
+        if branch != 'master':
+            suffix = 'rev'
+    elif rev_tag <= rev_branch:
+        rev = rev_tag
+        if branch != 'master':
+            name = tag
+        if is_branch_release:
+            suffix = 'post'
+    else:
+        rev = rev_branch
+        if is_branch_release:
+            suffix = 'pre'
+    if name != '':
+        name += '.'
+    return '{}{}{:02}-g{}{}'.format(name, suffix, rev, commit, dirty)
 
 
-def get_version_init_file(name):
+def _get_version_init_file(name):
     try:
         f = open(os.path.join(name, '__init__.py')).read()
     except IOError:
@@ -181,7 +274,7 @@ def get_version_init_file(name):
     return m.groups()[0]
 
 
-def write_version(name, version):
+def _write_version(name, version):
     try:
         init = open(os.path.join(root, name, '__init__.py.in')).readlines()
     except IOError:
@@ -190,71 +283,8 @@ def write_version(name, version):
     open(os.path.join(root, name, '__init__.py'), 'w').writelines(init)
 
 
-class BuildCommand(build):
-    def run(self):
-        write_version(self.distribution.get_name(),
-                      self.distribution.get_version())
-        build.run(self)
+def get_version(name, default):
+    return _get_version_git(default) or _get_version_init_file(name) or default
 
-
-class SDistCommand(sdist):
-    def make_release_tree(self, base_dir, files):
-        write_version(self.distribution.get_name(),
-                      self.distribution.get_version())
-        initfile = os.path.join(self.distribution.get_name(), '__init__.py')
-        if initfile not in files:
-            files.append(initfile)
-        sdist.make_release_tree(self, base_dir, files)
-
-
-class CoverageCommand(Command):
-    description = "run the package coverage"
-    user_options = [('file=', 'f', 'restrict coverage to a specific file'),
-                    ('erase', None,
-                     'erase previously collected coverage before run'),
-                    ('html-dir=', None,
-                     'Produce HTML coverage information in dir')]
-
-    def run(self):
-        cmd = ['nosetests', '--with-coverage', '--cover-html',
-               '--cover-package=' + self.distribution.get_name(),
-               '--cover-html-dir=' + self.html_dir]
-        if self.erase:
-            cmd.append('--cover-erase')
-        call(cmd + [self.file])
-
-    def initialize_options(self):
-        self.file = 'test'
-        self.erase = 0
-        self.html_dir = 'htmlcov'
-
-    def finalize_options(self):
-        pass
-
-
-class TestCommand(Command):
-    description = "run the test suite"
-    user_options = [('file=', 'f', 'restrict test to a specific file')]
-
-    def run(self):
-        call(['nosetests', self.file])
-
-    def initialize_options(self):
-        self.file = 'test'
-
-    def finalize_options(self):
-        pass
-
-
-def get_cmdclass():
-    return {'build': BuildCommand,
-            'build_ext': build_ext,
-            'coverage': CoverageCommand,
-            'sdist': SDistCommand,
-            'test': TestCommand}
 
 filterwarnings('ignore', "Unknown distribution option: 'install_requires'")
-
-# monkey patch to allow pure and elemental routines in the Fortran library
-numpy.distutils.from_template.routine_start_re = re.compile(r'(\n|\A)((     (\$|\*))|)\s*((im)?pure\s+|elemental\s+)*(subroutine|function)\b', re.I)
-numpy.distutils.from_template.function_start_re = re.compile(r'\n     (\$|\*)\s*((im)?pure\s+|elemental\s+)*function\b', re.I)
