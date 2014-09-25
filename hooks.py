@@ -30,17 +30,30 @@ configurable) or the last tag.
 
 # These variables can be changed by the hooks importer
 ABBREV = 5
+F2PY_TABLE = {'integer': {'int8': 'char',
+                          'int16': 'short',
+                          'int32': 'int',
+                          'int64': 'long_long'},
+              'real': {'real32': 'float',
+                       'real64': 'double'},
+              'complex': {'real32': 'complex_float',
+                          'real64': 'complex_double'}}
 REGEX_RELEASE = '^v(?P<name>[0-9.]+)$'
-REQUIRES_FORTRAN = False
+try:
+    import os
+    from Cython.Build import cythonize
+    USE_CYTHON = bool(int(os.getenv('SETUPHOOKS_USE_CYTHON', '1') or '0'))
+except ImportError:
+    USE_CYTHON = False
 
 import numpy
-import os
 import re
 import sys
 from numpy.distutils.command.build import build
-from numpy.distutils.command.build_ext import build_ext
+from numpy.distutils.command.build_src import build_src
 from numpy.distutils.command.sdist import sdist
 from numpy.distutils.core import Command
+from numpy.distutils.misc_util import has_f_sources
 from subprocess import call, Popen, PIPE
 from warnings import filterwarnings
 
@@ -66,14 +79,46 @@ def get_cmdclass():
                            self.distribution.get_version())
             build.run(self)
 
+    class BuildSrcCommand(build_src):
+        def initialize_options(self):
+            build_src.initialize_options(self)
+            self.f2py_opts = '--quiet'
+
+        def run(self):
+            has_fortran = False
+            has_cython = False
+            for ext in self.extensions:
+                has_fortran = has_fortran or has_f_sources(ext.sources)
+                for isource, source in enumerate(ext.sources):
+                    if source.endswith('.pyx'):
+                        if not USE_CYTHON:
+                            ext.sources[isource] = source[:-3] + 'c'
+                        else:
+                            has_cython = True
+            if has_fortran:
+                with open(os.path.join(root, '.f2py_f2cmap'), 'w') as f:
+                    f.write(repr(F2PY_TABLE))
+            if has_cython:
+                build_dir = None if self.inplace else self.build_src
+                new_extensions = cythonize(self.extensions, force=True,
+                                           build_dir=build_dir)
+                for i in range(len(self.extensions)):
+                    self.extensions[i] = new_extensions[i]
+            build_src.run(self)
+
     class SDistCommand(sdist):
         def make_release_tree(self, base_dir, files):
             _write_version(self.distribution.get_name(),
                            self.distribution.get_version())
             initfile = os.path.join(self.distribution.get_name(),
                                     '__init__.py')
+            new_files = []
+            for f in files:
+                if f.endswith('.pyx'):
+                    new_files.append(f[:-3] + 'c')
             if initfile not in files:
-                files.append(initfile)
+                new_files.append(initfile)
+            files.extend(new_files)
             sdist.make_release_tree(self, base_dir, files)
 
     class CoverageCommand(Command):
@@ -114,7 +159,7 @@ def get_cmdclass():
             pass
 
     return {'build': BuildCommand,
-            'build_ext': build_ext,
+            'build_src': BuildSrcCommand,
             'coverage': CoverageCommand,
             'sdist': SDistCommand,
             'test': TestCommand}
@@ -281,10 +326,6 @@ def _write_version(name, version):
         return
     init += ['\n', '__version__ = ' + repr(version) + '\n']
     open(os.path.join(root, name, '__init__.py'), 'w').writelines(init)
-
-
-def get_version(name, default):
-    return _get_version_git(default) or _get_version_init_file(name) or default
 
 
 filterwarnings('ignore', "Unknown distribution option: 'install_requires'")
