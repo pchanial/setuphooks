@@ -1,2 +1,2 @@
 from __future__ import print_function
-print('more test2')
+print('and more test2')
