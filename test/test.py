@@ -54,11 +54,11 @@ def run(cmd):
     stdout, stderr = process.communicate()
     if process.returncode != 0:
         if stderr != '':
-            stderr = '\n' + stderr
+            stderr = '\n' + stderr.decode('utf-8')
         raise RuntimeError(
             'Command failed (error {}): {}{}'.format(process.returncode, cmd,
                                                      stderr))
-    return stdout.strip()
+    return stdout.strip().decode('utf-8')
 
 
 def run_git(cmd):
