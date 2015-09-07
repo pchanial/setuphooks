@@ -286,11 +286,9 @@ def get_cmdclass():
     class CleanCommand(clean):
         def run(self):
             clean.run(self)
-            try:
+            if is_git_tree():
                 print(run_git('clean -fdX' + ('n' if self.dry_run else '')))
                 return
-            except RuntimeError:
-                pass
 
             extensions = '.o', '.pyc', 'pyd', 'pyo', '.so'
             for root_, dirs, files in os.walk(root):
@@ -300,12 +298,6 @@ def get_cmdclass():
                 for d in dirs:
                     if d in ('build', '__pycache__'):
                         self.__delete(os.path.join(root_, d), dir=True)
-            files = (
-                'MANIFEST',
-                os.path.join(self.distribution.get_name(), '__init__.py'))
-            for f in files:
-                if os.path.exists(f):
-                    self.__delete(f)
 
         def __delete(self, file_, dir=False):
             msg = 'would remove' if self.dry_run else 'removing'
@@ -386,6 +378,10 @@ def run_git(cmd, cwd=root):
     return stdout.strip().decode('utf-8')
 
 
+def is_git_tree():
+    return os.path.exists(os.path.join(root, '.git'))
+
+
 def _get_version_git(default):
     INF = 2147483647
 
@@ -460,9 +456,7 @@ def _get_version_git(default):
         # no branch has been created from an ancestor
         return INF
 
-    try:
-        run_git('rev-parse --is-inside-work-tree')
-    except (OSError, RuntimeError):
+    if not is_git_tree():
         return ''
 
     branch, tag, rev_tag, commit, dirty = get_description()
