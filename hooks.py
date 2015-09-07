@@ -219,7 +219,7 @@ def run_git(cmd, cwd=root):
         if stderr != '':
             stderr = '\n' + stderr.decode('utf-8')
         raise RuntimeError(
-            'Command failed (error {}): {}{}'.format(
+            'Command failed (error {0}): {1}{2}'.format(
                 process.returncode, cmd, stderr))
     return stdout.strip().decode('utf-8')
 
@@ -241,10 +241,11 @@ def _get_version_git(default):
     def get_description():
         branch = get_branch_name()
         try:
-            description = run_git('describe --abbrev={} --tags'.format(ABBREV))
+            description = run_git(
+                'describe --abbrev={0} --tags'.format(ABBREV))
         except RuntimeError:
             description = run_git(
-                'describe --abbrev={} --always'.format(ABBREV))
+                'describe --abbrev={0} --always'.format(ABBREV))
             regex = r"""^
             (?P<commit>.*?)
             (?P<dirty>(-dirty)?)
@@ -346,7 +347,7 @@ def _get_version_git(default):
             suffix = 'pre'
     if name != '':
         name += '.'
-    return '{}{}{:02}{}'.format(name, suffix, rev, dirty)
+    return '{0}{1}{2:02}{3}'.format(name, suffix, rev, dirty)
 
 
 def _get_version_init_file(name):
