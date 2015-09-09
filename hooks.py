@@ -135,7 +135,7 @@ def get_cmdclass():
                 if exe is None:
                     exe = numpy.distutils.exec_command.find_executable('ar')
                 numpy.distutils.log.set_verbosity(old_value)
-                fcompiler.executables['archiver'][0] = exe
+                self.compiler.archiver[0] = exe
                 flags = F77_COMPILE_ARGS_GFORTRAN + F77_COMPILE_OPT_GFORTRAN
                 if self.debug:
                     flags += F77_COMPILE_DEBUG_GFORTRAN
@@ -152,9 +152,8 @@ def get_cmdclass():
             elif isinstance(fcompiler,
                             numpy.distutils.fcompiler.intel.IntelFCompiler):
                 old_value = numpy.distutils.log.set_verbosity(-2)
-                exe = numpy.distutils.exec_command.find_executable('xiar')
+                self.compiler.archiver[0] = numpy.distutils.exec_command.find_executable('xiar')
                 numpy.distutils.log.set_verbosity(old_value)
-                fcompiler.executables['archiver'][0] = exe
                 flags = F77_COMPILE_ARGS_IFORT + F77_COMPILE_OPT_IFORT
                 if self.debug:
                     flags += F77_COMPILE_DEBUG_IFORT
