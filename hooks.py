@@ -167,8 +167,6 @@ def get_cmdclass():
                     flags += ['-openmp']
                 fcompiler.executables['compiler_f90'] += flags
                 fcompiler.libraries += [LIBRARY_OPENMP_IFORT]
-            else:
-                raise RuntimeError()
             build_clib.build_libraries(self, libraries)
 
     class BuildExtCommand(build_ext):
