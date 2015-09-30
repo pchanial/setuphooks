@@ -53,6 +53,7 @@ F2PY_TABLE = {'integer': {'int8': 'char',
               'complex': {'real32': 'complex_float',
                           'real64': 'complex_double'}}
 FCOMPILERS_DEFAULT = 'ifort', 'gfortran'
+FILE_PREPROCESS = 'preprocess.py'
 LIBRARY_OPENMP_GFORTRAN = 'gomp'
 LIBRARY_OPENMP_IFORT = 'iomp5'
 REGEX_RELEASE = '^v(?P<name>[0-9.]+)$'
@@ -235,6 +236,10 @@ class BuildSrcCommand(build_src):
         self.f2py_opts = '--quiet'
 
     def run(self):
+        if os.path.exists(FILE_PREPROCESS):
+            import imp
+            imp.load_source('preprocess', FILE_PREPROCESS)
+
         has_fortran = False
         has_cython = False
         for ext in self.extensions:
