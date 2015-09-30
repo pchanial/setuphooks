@@ -243,7 +243,8 @@ def get_cmdclass():
                 for isource, source in enumerate(ext.sources):
                     if source.endswith('.pyx'):
                         if not USE_CYTHON:
-                            ext.sources[isource] = source[:-3] + 'c'
+                            suf = 'cpp' if ext.language == 'c++' else 'c'
+                            ext.sources[isource] = source[:-3] + suf
                         else:
                             has_cython = True
             if has_fortran:
