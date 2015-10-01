@@ -27,6 +27,7 @@ since the last release branch (by default of name "v[0-9.]+", but it is
 configurable) or the last tag.
 
 """
+import os
 
 # These variables can be changed by the hooks importer
 ABBREV = 5
@@ -57,12 +58,8 @@ FILE_PREPROCESS = 'preprocess.py'
 LIBRARY_OPENMP_GFORTRAN = 'gomp'
 LIBRARY_OPENMP_IFORT = 'iomp5'
 REGEX_RELEASE = '^v(?P<name>[0-9.]+)$'
-try:
-    import os
-    from Cython.Build import cythonize
-    USE_CYTHON = bool(int(os.getenv('SETUPHOOKS_USE_CYTHON', '1') or '0'))
-except ImportError:
-    USE_CYTHON = False
+USE_CYTHON = bool(int(os.getenv('SETUPHOOKS_USE_CYTHON', '1') or '0'))
+MIN_VERSION_CYTHON = '0.13'
 
 import numpy
 import re
@@ -113,6 +110,16 @@ if _id is not None:
     table = {'ifort': 'intelem', 'gfortran': 'gnu95'}
     _df = (_id, tuple(table[f] for f in FCOMPILERS_DEFAULT)),
     numpy.distutils.fcompiler._default_compilers = _df
+
+
+def _use_cython():
+    if not USE_CYTHON:
+        return USE_CYTHON
+    try:
+        import Cython
+    except ImportError:
+        return False
+    return Cython.__version__ >= MIN_VERSION_CYTHON
 
 
 class BuildCommand(build):
@@ -246,15 +253,17 @@ class BuildSrcCommand(build_src):
             has_fortran = has_fortran or has_f_sources(ext.sources)
             for isource, source in enumerate(ext.sources):
                 if source.endswith('.pyx'):
-                    if not USE_CYTHON:
+                    if _use_cython():
+                        has_cython = True
+                    else:
                         suf = 'cpp' if ext.language == 'c++' else 'c'
                         ext.sources[isource] = source[:-3] + suf
-                    else:
-                        has_cython = True
+
         if has_fortran:
             with open(os.path.join(root, '.f2py_f2cmap'), 'w') as f:
                 f.write(repr(F2PY_TABLE))
         if has_cython:
+            from Cython.Build import cythonize
             build_dir = None if self.inplace else self.build_src
             new_extensions = cythonize(self.extensions, force=True,
                                        build_dir=build_dir)
