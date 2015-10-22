@@ -66,7 +66,7 @@ import re
 import shutil
 import sys
 from distutils.command.clean import clean
-from numpy.distutils.command.build import build
+from numpy.distutils.command.build_py import build_py
 from numpy.distutils.command.build_clib import build_clib
 from numpy.distutils.command.build_ext import build_ext
 from numpy.distutils.command.build_src import build_src
@@ -112,21 +112,17 @@ if _id is not None:
     numpy.distutils.fcompiler._default_compilers = _df
 
 
-def _use_cython():
-    if not USE_CYTHON:
-        return USE_CYTHON
-    try:
-        import Cython
-    except ImportError:
-        return False
-    return Cython.__version__ >= MIN_VERSION_CYTHON
-
-
-class BuildCommand(build):
+class BuildPyCommand(build_py):
     def run(self):
         _write_version(self.distribution.get_name(),
                        self.distribution.get_version())
-        build.run(self)
+        if not self.distribution.has_ext_modules():
+            # if there are extension modules, the preprocessing is performed
+            # in build_src, which is run before build_py
+            if os.path.exists(FILE_PREPROCESS):
+                import imp
+                imp.load_source('preprocess', FILE_PREPROCESS)
+        build_py.run(self)
 
 
 class BuildClibCommand(build_clib):
@@ -138,9 +134,9 @@ class BuildClibCommand(build_clib):
         if isinstance(fcompiler,
                       numpy.distutils.fcompiler.gnu.Gnu95FCompiler):
             old_value = numpy.distutils.log.set_verbosity(-2)
-            exe = numpy.distutils.exec_command.find_executable('gcc-ar')
+            exe = find_executable('gcc-ar')
             if exe is None:
-                exe = numpy.distutils.exec_command.find_executable('ar')
+                exe = find_executable('ar')
             numpy.distutils.log.set_verbosity(old_value)
             self.compiler.archiver[0] = exe
             flags = F77_COMPILE_ARGS_GFORTRAN + F77_COMPILE_OPT_GFORTRAN
@@ -159,7 +155,7 @@ class BuildClibCommand(build_clib):
         elif isinstance(fcompiler,
                         numpy.distutils.fcompiler.intel.IntelFCompiler):
             old_value = numpy.distutils.log.set_verbosity(-2)
-            self.compiler.archiver[0] = numpy.distutils.exec_command.find_executable('xiar')
+            self.compiler.archiver[0] = find_executable('xiar')
             numpy.distutils.log.set_verbosity(old_value)
             flags = F77_COMPILE_ARGS_IFORT + F77_COMPILE_OPT_IFORT
             if self.debug:
@@ -247,44 +243,59 @@ class BuildSrcCommand(build_src):
             import imp
             imp.load_source('preprocess', FILE_PREPROCESS)
 
-        has_fortran = False
-        has_cython = False
-        for ext in self.extensions:
-            has_fortran = has_fortran or has_f_sources(ext.sources)
-            for isource, source in enumerate(ext.sources):
-                if source.endswith('.pyx'):
-                    if _use_cython():
-                        has_cython = True
-                    else:
-                        suf = 'cpp' if ext.language == 'c++' else 'c'
-                        ext.sources[isource] = source[:-3] + suf
-
-        if has_fortran:
+        if self._has_fortran():
             with open(os.path.join(root, '.f2py_f2cmap'), 'w') as f:
                 f.write(repr(F2PY_TABLE))
-        if has_cython:
+
+        if self._has_cython():
             from Cython.Build import cythonize
-            build_dir = None if self.inplace else self.build_src
-            new_extensions = cythonize(self.extensions, force=True,
-                                       build_dir=build_dir)
+            new_extensions = cythonize(self.extensions)
             for i in range(len(self.extensions)):
                 self.extensions[i] = new_extensions[i]
+        else:
+            for ext in self.extensions:
+                for isource, source in enumerate(ext.sources):
+                    if source.endswith('.pyx'):
+                        suf = 'cpp' if ext.language == 'c++' else 'c'
+                        new_source = source[:-3] + suf
+                        ext.sources[isource] = new_source
+                        if not os.path.exists(new_source):
+                            print("Aborting: cythonized file '{}' is missing.".
+                                  format(new_source))
+                            sys.exit()
+
         build_src.run(self)
+
+    def _has_cython(self):
+        if not USE_CYTHON or not any(_.endswith('.pyx')
+                                     for ext in self.extensions
+                                     for _ in ext.sources):
+            return False
+        try:
+            import Cython
+        except ImportError:
+            print('Cython is not installed, defaulting to C/C++ files.')
+            return False
+        if Cython.__version__ < MIN_VERSION_CYTHON:
+            print("The Cython version is older than that required ('{0}' < '{1"
+                  "}'). Defaulting to C/C++ files."
+                  .format(Cython.__version__, MIN_VERSION_CYTHON))
+            return False
+        return True
+
+    def _has_fortran(self):
+        return any(has_f_sources(ext.sources) for ext in self.extensions)
 
 
 class SDistCommand(sdist):
+    sub_commands = [('build_src', lambda *args: True),
+                    ('build_py', lambda *args: True)] + sdist.sub_commands
+
     def make_release_tree(self, base_dir, files):
-        _write_version(self.distribution.get_name(),
-                       self.distribution.get_version())
         initfile = os.path.join(self.distribution.get_name(),
                                 '__init__.py')
-        new_files = []
-        for f in files:
-            if f.endswith('.pyx'):
-                new_files.append(f[:-3] + 'c')
         if initfile not in files:
-            new_files.append(initfile)
-        files.extend(new_files)
+            files.append(initfile)
         sdist.make_release_tree(self, base_dir, files)
 
 
@@ -356,7 +367,7 @@ class TestCommand(Command):
         pass
 
 
-cmdclass = {'build': BuildCommand,
+cmdclass = {'build_py': BuildPyCommand,
             'build_clib': BuildClibCommand,
             'build_ext': BuildExtCommand,
             'build_src': BuildSrcCommand,
