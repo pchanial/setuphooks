@@ -386,6 +386,10 @@ def run_git(cmd, cwd=root):
     if sys.platform == 'win32':
         git = 'git.cmd'
     cmd = git + ' ' + cmd
+    return run(cmd, cwd=cwd)
+
+
+def run(cmd, cwd=root):
     process = Popen(cmd.split(), cwd=cwd, stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
     if process.returncode != 0:
