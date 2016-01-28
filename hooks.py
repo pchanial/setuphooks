@@ -393,8 +393,9 @@ def run(cmd, cwd=root):
     process = Popen(cmd.split(), cwd=cwd, stdout=PIPE, stderr=PIPE)
     stdout, stderr = process.communicate()
     if process.returncode != 0:
+        stderr = stderr.decode('utf-8')
         if stderr != '':
-            stderr = '\n' + stderr.decode('utf-8')
+            stderr = '\n' + stderr
         raise RuntimeError(
             'Command failed (error {0}): {1}{2}'.format(
                 process.returncode, cmd, stderr))
