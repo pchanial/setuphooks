@@ -251,8 +251,12 @@ class BuildSrcCommand(build_src):
         if self._has_cython():
             from Cython.Build import cythonize
             new_extensions = cythonize(self.extensions)
-            for i in range(len(self.extensions)):
-                self.extensions[i] = new_extensions[i]
+            for i, ext in enumerate(new_extensions):
+                for source in self.extensions[i].sources:
+                    if source.endswith('.pyx'):
+                        # to include cython file in the MANIFEST
+                        ext.depends.append(source)
+                self.extensions[i] = ext
         else:
             for ext in self.extensions:
                 for isource, source in enumerate(ext.sources):
