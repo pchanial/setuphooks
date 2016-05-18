@@ -293,12 +293,8 @@ class SDistCommand(sdist):
                     ('build_py', lambda *args: True)] + sdist.sub_commands
 
     def make_release_tree(self, base_dir, files):
-        initfile = os.path.join(self.distribution.get_name(),
-                                '__init__.py')
-        if initfile not in files:
-            files.append(initfile)
+        files.append('hooks.py')
         sdist.make_release_tree(self, base_dir, files)
-
 
 class CleanCommand(clean):
     def run(self):
