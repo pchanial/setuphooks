@@ -63,10 +63,10 @@ MIN_VERSION_CYTHON = '0.13'
 
 import numpy
 import re
+import setuptools
 import shutil
 import sys
 from distutils.command.clean import clean
-from numpy.distutils.command.build_py import build_py
 from numpy.distutils.command.build_clib import build_clib
 from numpy.distutils.command.build_ext import build_ext
 from numpy.distutils.command.build_src import build_src
@@ -111,19 +111,6 @@ if _id is not None:
     table = {'ifort': 'intelem', 'gfortran': 'gnu95'}
     _df = (_id, tuple(table[f] for f in FCOMPILERS_DEFAULT)),
     numpy.distutils.fcompiler._default_compilers = _df
-
-
-class BuildPyCommand(build_py):
-    def run(self):
-        _write_version(self.distribution.get_name(),
-                       self.distribution.get_version())
-        if not self.distribution.has_ext_modules():
-            # if there are extension modules, the preprocessing is performed
-            # in build_src, which is run before build_py
-            if os.path.exists(FILE_PREPROCESS):
-                import imp
-                imp.load_source('preprocess', FILE_PREPROCESS)
-        build_py.run(self)
 
 
 class BuildClibCommand(build_clib):
@@ -172,6 +159,60 @@ class BuildClibCommand(build_clib):
             fcompiler.executables['compiler_f90'] += flags
             fcompiler.libraries += [LIBRARY_OPENMP_IFORT]
         build_clib.build_libraries(self, libraries)
+
+
+class BuildCyCommand(Command):
+    description = 'cythonize files'
+    user_options = []
+
+    def run(self):
+        extensions = self.distribution.ext_modules
+        if self._has_cython():
+            from Cython.Build import cythonize
+            new_extensions = cythonize(extensions)
+            for i, ext in enumerate(new_extensions):
+                for source in extensions[i].sources:
+                    if source.endswith('.pyx'):
+                        # include cython file in the MANIFEST
+                        ext.depends.append(source)
+                extensions[i] = ext
+            return
+
+        for ext in extensions:
+            for isource, source in enumerate(ext.sources):
+                if source.endswith('.pyx'):
+                    suf = 'cpp' if ext.language == 'c++' else 'c'
+                    new_source = source[:-3] + suf
+                    ext.sources[isource] = new_source
+                    if not os.path.exists(new_source):
+                        print("Aborting: cythonized file '{}' is missing.".
+                              format(new_source))
+                        sys.exit()
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def _has_cython(self):
+        extensions = self.distribution.ext_modules
+        if not USE_CYTHON or not any(_.endswith('.pyx')
+                                     for ext in extensions
+                                     for _ in ext.sources):
+            return False
+        try:
+            import Cython
+        except ImportError:
+            print('Cython is not installed, defaulting to C/C++ files.')
+            return False
+        if parse_version(Cython.__version__) < \
+           parse_version(MIN_VERSION_CYTHON):
+            print("The Cython version is older than that required ('{0}' < '{1"
+                  "}'). Defaulting to C/C++ files."
+                  .format(Cython.__version__, MIN_VERSION_CYTHON))
+            return False
+        return True
 
 
 class BuildExtCommand(build_ext):
@@ -234,71 +275,58 @@ class BuildExtCommand(build_ext):
         build_ext.build_extensions(self)
 
 
+class BuildPreCommand(Command):
+    description = 'run the package preprocessing'
+    user_options = []
+
+    def run(self):
+        self._write_version()
+        if os.path.exists(FILE_PREPROCESS):
+            import imp
+            imp.load_source('preprocess', FILE_PREPROCESS)
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def _write_version(self):
+        name = self.distribution.get_name()
+        version = self.distribution.get_version()
+        try:
+            init = open(os.path.join(root, name, '__init__.py.in')).readlines()
+        except IOError:
+            return
+        init += ['\n', '__version__ = ' + repr(version) + '\n']
+        open(os.path.join(root, name, '__init__.py'), 'w').writelines(init)
+
+
 class BuildSrcCommand(build_src):
     def initialize_options(self):
         build_src.initialize_options(self)
         self.f2py_opts = '--quiet'
 
     def run(self):
-        if os.path.exists(FILE_PREPROCESS):
-            import imp
-            imp.load_source('preprocess', FILE_PREPROCESS)
-
+        self.run_command('build_pre')
+        self.run_command('build_cy')
         if self._has_fortran():
             with open(os.path.join(root, '.f2py_f2cmap'), 'w') as f:
                 f.write(repr(F2PY_TABLE))
-
-        if self._has_cython():
-            from Cython.Build import cythonize
-            new_extensions = cythonize(self.extensions)
-            for i, ext in enumerate(new_extensions):
-                for source in self.extensions[i].sources:
-                    if source.endswith('.pyx'):
-                        # to include cython file in the MANIFEST
-                        ext.depends.append(source)
-                self.extensions[i] = ext
-        else:
-            for ext in self.extensions:
-                for isource, source in enumerate(ext.sources):
-                    if source.endswith('.pyx'):
-                        suf = 'cpp' if ext.language == 'c++' else 'c'
-                        new_source = source[:-3] + suf
-                        ext.sources[isource] = new_source
-                        if not os.path.exists(new_source):
-                            print("Aborting: cythonized file '{}' is missing.".
-                                  format(new_source))
-                            sys.exit()
-
         build_src.run(self)
 
-    def _has_cython(self):
-        if not USE_CYTHON or not any(_.endswith('.pyx')
-                                     for ext in self.extensions
-                                     for _ in ext.sources):
-            return False
-        try:
-            import Cython
-        except ImportError:
-            print('Cython is not installed, defaulting to C/C++ files.')
-            return False
-        if Cython.__version__ < MIN_VERSION_CYTHON:
-            print("The Cython version is older than that required ('{0}' < '{1"
-                  "}'). Defaulting to C/C++ files."
-                  .format(Cython.__version__, MIN_VERSION_CYTHON))
-            return False
-        return True
+    def pyrex_sources(self, sources, extension):
+        return sources
 
     def _has_fortran(self):
         return any(has_f_sources(ext.sources) for ext in self.extensions)
 
 
 class SDistCommand(sdist):
-    sub_commands = [('build_src', lambda *args: True),
-                    ('build_py', lambda *args: True)] + sdist.sub_commands
+    def make_distribution(self):
+        self.filelist.append('hooks.py')
+        sdist.make_distribution(self)
 
-    def make_release_tree(self, base_dir, files):
-        files.append('hooks.py')
-        sdist.make_release_tree(self, base_dir, files)
 
 class CleanCommand(clean):
     def run(self):
@@ -368,14 +396,16 @@ class TestCommand(Command):
         pass
 
 
-cmdclass = {'build_py': BuildPyCommand,
-            'build_clib': BuildClibCommand,
-            'build_ext': BuildExtCommand,
-            'build_src': BuildSrcCommand,
-            'clean': CleanCommand,
-            'coverage': CoverageCommand,
-            'sdist': SDistCommand,
-            'test': TestCommand}
+cmdclass = {
+    'build_clib': BuildClibCommand,
+    'build_cy': BuildCyCommand,
+    'build_ext': BuildExtCommand,
+    'build_pre': BuildPreCommand,
+    'build_src': BuildSrcCommand,
+    'clean': CleanCommand,
+    'coverage': CoverageCommand,
+    'sdist': SDistCommand,
+    'test': TestCommand}
 
 
 def get_version(name, default):
@@ -541,15 +571,6 @@ def _get_version_init_file(name):
     if m is None:
         return ''
     return m.groups()[0]
-
-
-def _write_version(name, version):
-    try:
-        init = open(os.path.join(root, name, '__init__.py.in')).readlines()
-    except IOError:
-        return
-    init += ['\n', '__version__ = ' + repr(version) + '\n']
-    open(os.path.join(root, name, '__init__.py'), 'w').writelines(init)
 
 
 filterwarnings('ignore', "Unknown distribution option: 'install_requires'")
