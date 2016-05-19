@@ -158,6 +158,8 @@ class BuildClibCommand(build_clib):
                 flags += ['-openmp']
             fcompiler.executables['compiler_f90'] += flags
             fcompiler.libraries += [LIBRARY_OPENMP_IFORT]
+        else:
+            raise RuntimeError("Unhandled compiler: '{}'.".format(fcompiler))
         build_clib.build_libraries(self, libraries)
 
 
@@ -272,6 +274,9 @@ class BuildExtCommand(build_ext):
                     flags += ['-openmp']
                 fc.executables['compiler_f90'] += flags
                 fc.libraries += [LIBRARY_OPENMP_IFORT]
+            elif fc is not None:
+                raise RuntimeError(
+                    "Unhandled compiler: '{}'.".format(fcompiler))
         build_ext.build_extensions(self)
 
 
